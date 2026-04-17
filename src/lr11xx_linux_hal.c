@@ -1,11 +1,12 @@
 // Raspberry-PI or generic linux implenmentation based on 
 // SWSD003's HAL for STM32: https://github.com/Lora-net/SWSD003/blob/08912a2324bfc931224d368984b58b4a853078ad/lr11xx/common/lr11xx_hal.c
 
-#ifndef LR11XX_HAL_C
-#define LR11XX_HAL_C
+#ifndef LR11XX_LINUX_HAL_C
+#define LR11XX_LINUX_HAL_C
 
 
 #include "lr11xx_hal.h"
+#include "lr11xx_linux_hal.h"
 #include <bits/types.h>
 #include <linux/spi/spi.h>
 #include <stdbool.h>
@@ -21,70 +22,16 @@
 #include <fcntl.h>
 
 #include <linux/spi/spidev.h>
-//////////////
-/// Config ///
-//////////////
-// These are expected to be defined and over witten by your code
 
-#ifndef LR1121_RESET_PIN
-    #define LR1121_RESET_PIN "GPIO_NULL_1"
-#endif
-#ifndef LR1121_NSS_PIN
-    #define LR1121_NSS_PIN "GPIO_NULL_3"
-#endif
-#ifndef LR1121_BUSY_PIN
-    #define LR1121_BUSY_PIN "GPIO_NULL_4"
-#endif
-// The IRQ pin is not watched here. 
-
-//////////////////////////////
-/// Advanced configuration ///
-//////////////////////////////
-// There are bascially constants, don't change them unless you know what you are doing
-
-//#define USE_LR11XX_CRC_OVER_SPI
-#ifndef LR1121_KSPI_MODE // uint8_t
-    #define LR1121_KSPI_MODE SPI_MODE_0
-#endif
-#ifndef LR1121_KSPI_MAX_SPEED_HZ // uint32_t
-    #define LR1121_KSPI_MAX_SPEED_HZ 16000000 // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23 
-#endif 
-#ifndef LR1121_KBITS_PER_WORD // uint8_t
-    #define LR1121_KBITS_PER_WORD 0 // number of bits per word. 0 means 8 bits  
-#endif 
-#ifndef LR1121_KSPI_IS_LSB_FIRST // uint8_t
-    #define LR1121_KSPI_IS_LSB_FIRST 0 // MSB first (0 is MSB, 1 or else is LSB)
-#endif
-#ifndef LR1121_KGPIO_CONSUMER_IDENT
-    #define LR1121_KGPIO_CONSUMER_IDENT "LR11XX_GPIO_CONSUMER"
-#endif 
-
-typedef struct lr11xx_hal_context_tracked_memory {
-    struct gpiod_chip* chip; 
-    struct gpiod_line_settings* settings_input;
-    struct gpiod_line_settings* settings_output;
-    struct gpiod_line_config* cfg_line;
-    struct gpiod_request_config* cfg_req;
-    struct gpiod_line_request* line_req;
-} lr11xx_hal_ctx_mem_t;
-
-typedef struct lr11xx_hal_context {
-    lr11xx_hal_ctx_mem_t* mem;
-
-    int spi_device;
-    unsigned int reset_pin_offset;
-    unsigned int nss_pin_offset;
-    unsigned int busy_pin_offset;
-
-    struct gpiod_line_request* line_req;
-} lr11xx_hal_context_t;
-
-lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* gpio_device_path) {
+lr11xx_hal_context_t* lr11xx_init_hal(
+    const char* spi_device_path, const char* gpio_device_path,
+    const char* reset_pin_name, const char* nss_pin_name, const char* busy_pin_name
+) {
     assert(spi_device_path); assert(gpio_device_path); // null check
 
     // alloc context & mem structs 
-    lr11xx_hal_context_t* ctx = malloc(sizeof(lr11xx_hal_context_t));
-    lr11xx_hal_ctx_mem_t* mem = ctx->mem = malloc(sizeof(lr11xx_hal_ctx_mem_t));
+    lr11xx_hal_context_t* ctx = malloc(sizeof(lr11xx_hal_context_t)); assert(ctx);
+    lr11xx_hal_ctx_mem_t* mem = ctx->mem = malloc(sizeof(lr11xx_hal_ctx_mem_t)); assert(mem);
 
     ///////////
     /// SPI ///
@@ -127,9 +74,9 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
     struct gpiod_chip* chip = mem->chip = gpiod_chip_open(gpio_device_path); assert(chip); 
     
     // get GPIO offsets
-    int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, LR1121_RESET_PIN); assert(reset_pin_offset != -1);
-    int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, LR1121_NSS_PIN  ); assert(nss_pin_offset   != -1);
-    int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, LR1121_BUSY_PIN ); assert(busy_pin_offset  != -1);
+    int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, reset_pin_name); assert(reset_pin_offset != -1);
+    int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, nss_pin_name  ); assert(nss_pin_offset   != -1);
+    int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, busy_pin_name ); assert(busy_pin_offset  != -1);
     ctx->nss_pin_offset = nss_pin_offset; ctx->busy_pin_offset = busy_pin_offset;
     
     // input pin config: floating, active high
@@ -207,7 +154,7 @@ void lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_io
 /**
  * @brief Coverts a const void* into a const lr11xx_hal_context_t*
  */
-inline const lr11xx_hal_context_t* lr11xx_hal_context_from_ptr(const void* ctx) {
+const lr11xx_hal_context_t* lr11xx_hal_context_from_ptr(const void* ctx) {
     assert(ctx);
     return (const lr11xx_hal_context_t*) ctx;
 }
@@ -224,7 +171,7 @@ lr11xx_hal_status_t lr11xx_hal_write(const void *context, const uint8_t *command
 
     // construct packet & ioc transfer
     struct spi_ioc_transfer t = {0};
-    uint8_t* tx_buf = malloc(len);
+    uint8_t* tx_buf = malloc(len); assert(tx_buf);
     t.tx_buf = (__u64)tx_buf;
     t.len = len;
     memcpy(tx_buf, command, command_length);
@@ -260,7 +207,7 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
     // construct cmd packet & ioc transfer
     struct spi_ioc_transfer cmd_tx = {0};
     cmd_tx.len = tx_len;
-    uint8_t* tx_buf = malloc(tx_len);
+    uint8_t* tx_buf = malloc(tx_len); assert(tx_buf);
     cmd_tx.tx_buf = (__u64)tx_buf;
     memcpy(tx_buf, command, command_length);
     #if defined( USE_LR11XX_CRC_OVER_SPI )
@@ -278,9 +225,10 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
     // construct receive packet & ioc transfer
     struct spi_ioc_transfer data_rx = {0};
     data_rx.len = rx_len;
-    uint8_t* data_rx_buf = malloc(rx_len);
+    uint8_t* data_rx_buf = malloc(rx_len); assert(data_rx_buf);
     data_rx.rx_buf = (__u64)data_rx_buf;
-    uint8_t* nop_tx_buf = malloc(rx_len); memset(nop_tx_buf, dummy_byte, rx_len);
+    uint8_t* nop_tx_buf = malloc(rx_len); assert(nop_tx_buf);
+    memset(nop_tx_buf, dummy_byte, rx_len); 
     data_rx.tx_buf = (__u64)nop_tx_buf;
 
     // transmit cmd packet 
@@ -325,7 +273,7 @@ lr11xx_hal_status_t lr11xx_hal_direct_read(const void *context, uint8_t *data, c
     // construct receive packet & ioc transfer
     struct spi_ioc_transfer rx = {0};
     rx.len = len;
-    uint8_t* rx_buf = malloc(len);
+    uint8_t* rx_buf = malloc(len); assert(rx_buf);
     rx.rx_buf = (__u64)rx_buf;
 
     // receive data

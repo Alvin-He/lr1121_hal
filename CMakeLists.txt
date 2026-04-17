@@ -21,15 +21,28 @@ set_target_properties(libgpiod PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/deps/include"
 )
 
-add_library(lr11xx_hal STATIC
-    src/lr11xx_hal.c
-)
+# openssl
+find_package(OpenSSL COMPONENTS Crypto)
 
 #
 # Targets
 #
+
+add_library(lr11xx_hal STATIC
+    src/lr11xx_linux_hal.c
+)
 add_library(lr11xx_hal::lr11xx_hal ALIAS lr11xx_hal)
 target_link_libraries(lr11xx_hal 
     PUBLIC lr11xx_driver::lr11xx_driver
     PRIVATE libgpiod
 )
+
+if(OpenSSL_FOUND)
+    add_executable(lr11xx_firmware_updater src/firmware_updater.c)
+    target_link_libraries(lr11xx_firmware_updater
+        PUBLIC lr11xx_hal
+        PRIVATE OpenSSL::Crypto
+    )
+else()
+    message(AUTHOR_WARNING "No OpenSSL found, unable to compile lr11xx_firmware_updater")
+endif()
