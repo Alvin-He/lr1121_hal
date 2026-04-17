@@ -29,15 +29,14 @@
 #ifndef LR1121_RESET_PIN
     #define LR1121_RESET_PIN "GPIO_NULL_1"
 #endif
-#ifndef LR1121_IRQ_PIN
-    #define LR1121_IRQ_PIN "GPIO_NULL_2"
-#endif 
 #ifndef LR1121_NSS_PIN
     #define LR1121_NSS_PIN "GPIO_NULL_3"
 #endif
 #ifndef LR1121_BUSY_PIN
     #define LR1121_BUSY_PIN "GPIO_NULL_4"
 #endif
+// The IRQ pin is not watched here. 
+
 //////////////////////////////
 /// Advanced configuration ///
 //////////////////////////////
@@ -67,7 +66,6 @@ typedef struct lr11xx_hal_context_tracked_memory {
     struct gpiod_line_config* cfg_line;
     struct gpiod_request_config* cfg_req;
     struct gpiod_line_request* line_req;
-    struct gpiod_edge_event_buffer* event_buf;
 } lr11xx_hal_ctx_mem_t;
 
 typedef struct lr11xx_hal_context {
@@ -75,13 +73,10 @@ typedef struct lr11xx_hal_context {
 
     int spi_device;
     unsigned int reset_pin_offset;
-    unsigned int irq_pin_offset;
     unsigned int nss_pin_offset;
     unsigned int busy_pin_offset;
 
     struct gpiod_line_request* line_req;
-    struct gpiod_edge_event_buffer* event_buf;
-    size_t max_events;
 } lr11xx_hal_context_t;
 
 lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* gpio_device_path) {
@@ -133,10 +128,8 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
     
     // get GPIO offsets
     int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, LR1121_RESET_PIN); assert(reset_pin_offset != -1);
-    int irq_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, LR1121_IRQ_PIN  ); assert(irq_pin_offset   != -1);
     int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, LR1121_NSS_PIN  ); assert(nss_pin_offset   != -1);
     int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, LR1121_BUSY_PIN ); assert(busy_pin_offset  != -1);
-    ctx->reset_pin_offset = reset_pin_offset; ctx->irq_pin_offset = irq_pin_offset; 
     ctx->nss_pin_offset = nss_pin_offset; ctx->busy_pin_offset = busy_pin_offset;
     
     // input pin config: floating, active high
@@ -155,7 +148,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
 
     // put the seetings into a ling config
     struct gpiod_line_config* cfg_line = mem->cfg_line = gpiod_line_config_new(); assert(cfg_line);
-    unsigned int inputs[] = {ctx->busy_pin_offset, ctx->irq_pin_offset};
+    unsigned int inputs[] = {ctx->busy_pin_offset};
     assert(gpiod_line_config_add_line_settings(cfg_line, inputs, 2, settings_input) == 0);
     unsigned int outputs[] = {ctx->reset_pin_offset, ctx->nss_pin_offset};
     assert(gpiod_line_config_add_line_settings(cfg_line, outputs, 2, settings_output) == 0);
@@ -164,10 +157,6 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
     struct gpiod_request_config* cfg_req = mem->cfg_req = gpiod_request_config_new(); assert(cfg_req);
     gpiod_request_config_set_consumer(cfg_req, LR1121_KGPIO_CONSUMER_IDENT);
     gpiod_request_config_set_event_buffer_size(cfg_req, 0); // use defult
-    // make edge event buffer
-    ctx->max_events = gpiod_request_config_get_event_buffer_size(cfg_req);
-    struct gpiod_edge_event_buffer* event_buf = ctx->event_buf = mem->event_buf = 
-        gpiod_edge_event_buffer_new(ctx->max_events); assert(event_buf);
 
     // request the pins
     struct gpiod_line_request* req = mem->line_req = gpiod_chip_request_lines(chip, cfg_req, cfg_line); assert(NULL);
@@ -182,7 +171,6 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx) {
 
     // must be free the the reverse order of construction (aka last constructed is first released)
     lr11xx_hal_ctx_mem_t* mem = ctx->mem;
-    gpiod_edge_event_buffer_free(mem->event_buf); ctx->event_buf = mem->event_buf = NULL;
     gpiod_line_request_release(mem->line_req); ctx->line_req = mem->line_req = NULL; 
     gpiod_line_config_free(mem->cfg_line); mem->cfg_line = NULL;
     gpiod_line_settings_free(mem->settings_output); mem->settings_output = NULL;
