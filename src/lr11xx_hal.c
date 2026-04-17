@@ -21,19 +21,44 @@
 #include <fcntl.h>
 
 #include <linux/spi/spidev.h>
-#define USE_LR11XX_CRC_OVER_SPI
+//////////////
+/// Config ///
+//////////////
+// These are expected to be defined and over witten by your code
 
-static uint8_t KSPI_MODE = SPI_MODE_0;
-static uint32_t KSPI_MAX_SPEED_HZ = 16000000; // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23
-static uint8_t KSPI_BITS_PER_WORD = 0; // number of bits per word. 0 means 8 bits  
-static uint8_t KSPI_IS_LSB_FIRST = false; // MSB first (0 is MSB, 1 or else is LSB)
+#ifndef LR1121_RESET_PIN
+    #define LR1121_RESET_PIN "GPIO_NULL_1"
+#endif
+#ifndef LR1121_IRQ_PIN
+    #define LR1121_IRQ_PIN "GPIO_NULL_2"
+#endif 
+#ifndef LR1121_NSS_PIN
+    #define LR1121_NSS_PIN "GPIO_NULL_3"
+#endif
+#ifndef LR1121_BUSY_PIN
+    #define LR1121_BUSY_PIN "GPIO_NULL_4"
+#endif
+//////////////////////////////
+/// Advanced configuration ///
+//////////////////////////////
+// There are bascially constants, don't change them unless you know what you are doing
 
-#define RESET_PIN "GPIO7"
-#define IRQ_PIN "GPIO8"
-#define NSS_PIN "GPIO9"
-#define BUSY_PIN "GPIO10" 
-
-#define GPIO_CONSUMER_IDENT "LR11XX_GPIO_CONSUMER"
+//#define USE_LR11XX_CRC_OVER_SPI
+#ifndef LR1121_KSPI_MODE // uint8_t
+    #define LR1121_KSPI_MODE SPI_MODE_0
+#endif
+#ifndef LR1121_KSPI_MAX_SPEED_HZ // uint32_t
+    #define LR1121_KSPI_MAX_SPEED_HZ 16000000 // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23 
+#endif 
+#ifndef LR1121_KBITS_PER_WORD // uint8_t
+    #define LR1121_KBITS_PER_WORD 0 // number of bits per word. 0 means 8 bits  
+#endif 
+#ifndef LR1121_KSPI_IS_LSB_FIRST // uint8_t
+    #define LR1121_KSPI_IS_LSB_FIRST 0 // MSB first (0 is MSB, 1 or else is LSB)
+#endif
+#ifndef LR1121_KGPIO_CONSUMER_IDENT
+    #define LR1121_KGPIO_CONSUMER_IDENT "LR11XX_GPIO_CONSUMER"
+#endif 
 
 typedef struct lr11xx_hal_context_tracked_memory {
     struct gpiod_chip* chip; 
@@ -72,28 +97,32 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
     int dev = ctx->spi_device = openat(AT_FDCWD, spi_device_path, O_RDWR | O_DSYNC); assert(dev >= 0);
     
     // set spi mode
-    assert(ioctl(dev, SPI_IOC_WR_MODE, &KSPI_MODE) >= 0);
+    const uint8_t mode = LR1121_KSPI_MODE;
+    assert(ioctl(dev, SPI_IOC_WR_MODE, &mode) >= 0);
     uint8_t mode_set;
     assert(ioctl(dev, SPI_IOC_RD_MODE, &mode_set) >= 0);
-    assert(mode_set == KSPI_MODE);
+    assert(mode_set == mode);
 
     // set spi speed
-    assert(ioctl(dev, SPI_IOC_WR_MAX_SPEED_HZ, &KSPI_MAX_SPEED_HZ) >= 0);
+    const uint32_t speed = LR1121_KSPI_MAX_SPEED_HZ;
+    assert(ioctl(dev, SPI_IOC_WR_MAX_SPEED_HZ, &speed) >= 0);
     uint32_t speed_set;
     assert(ioctl(dev, SPI_IOC_RD_MAX_SPEED_HZ, &speed_set) >= 0);
-    assert(speed_set == KSPI_MAX_SPEED_HZ);
+    assert(speed_set == speed);
 
     // set spi bits per word
-    assert(ioctl(dev, SPI_IOC_WR_BITS_PER_WORD, &KSPI_BITS_PER_WORD) >= 0); // 0 is 8 bits per word
+    const uint8_t bpw = LR1121_KBITS_PER_WORD;
+    assert(ioctl(dev, SPI_IOC_WR_BITS_PER_WORD, &bpw) >= 0); // 0 is 8 bits per word
     uint8_t bpw_set; 
     assert(ioctl(dev, SPI_IOC_RD_BITS_PER_WORD, &bpw_set) >= 0);
-    assert(bpw_set == KSPI_BITS_PER_WORD);
+    assert(bpw_set == bpw);
 
     // set spi bit order
-    assert(ioctl(dev, SPI_IOC_WR_LSB_FIRST, &KSPI_IS_LSB_FIRST) >= 0);
+    uint8_t bit_order = LR1121_KSPI_IS_LSB_FIRST;
+    assert(ioctl(dev, SPI_IOC_WR_LSB_FIRST, &bit_order) >= 0);
     uint8_t bit_order_set;
     assert(ioctl(dev, SPI_IOC_RD_LSB_FIRST, &bit_order_set) >= 0);
-    assert(bit_order_set == KSPI_IS_LSB_FIRST);
+    assert(bit_order_set == bit_order);
 
     ////////////
     /// GPIO ///
@@ -103,10 +132,10 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
     struct gpiod_chip* chip = mem->chip = gpiod_chip_open(gpio_device_path); assert(chip); 
     
     // get GPIO offsets
-    int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, RESET_PIN); assert(reset_pin_offset != -1);
-    int irq_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, IRQ_PIN  ); assert(irq_pin_offset   != -1);
-    int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, NSS_PIN  ); assert(nss_pin_offset   != -1);
-    int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, BUSY_PIN ); assert(busy_pin_offset  != -1);
+    int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, LR1121_RESET_PIN); assert(reset_pin_offset != -1);
+    int irq_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, LR1121_IRQ_PIN  ); assert(irq_pin_offset   != -1);
+    int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, LR1121_NSS_PIN  ); assert(nss_pin_offset   != -1);
+    int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, LR1121_BUSY_PIN ); assert(busy_pin_offset  != -1);
     ctx->reset_pin_offset = reset_pin_offset; ctx->irq_pin_offset = irq_pin_offset; 
     ctx->nss_pin_offset = nss_pin_offset; ctx->busy_pin_offset = busy_pin_offset;
     
@@ -133,7 +162,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(const char* spi_device_path, const char* g
 
     // gpio request config
     struct gpiod_request_config* cfg_req = mem->cfg_req = gpiod_request_config_new(); assert(cfg_req);
-    gpiod_request_config_set_consumer(cfg_req, GPIO_CONSUMER_IDENT);
+    gpiod_request_config_set_consumer(cfg_req, LR1121_KGPIO_CONSUMER_IDENT);
     gpiod_request_config_set_event_buffer_size(cfg_req, 0); // use defult
     // make edge event buffer
     ctx->max_events = gpiod_request_config_get_event_buffer_size(cfg_req);
