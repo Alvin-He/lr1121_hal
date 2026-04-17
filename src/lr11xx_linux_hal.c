@@ -23,6 +23,9 @@
 
 #include <linux/spi/spidev.h>
 
+#define checkbs(s) if(!(s)) return false;
+#define checkls(s) if(!(s)) return LR11XX_HAL_STATUS_ERROR;
+
 lr11xx_hal_context_t* lr11xx_init_hal(
     const char* spi_device_path, const char* gpio_device_path,
     const char* reset_pin_name, const char* nss_pin_name, const char* busy_pin_name
@@ -132,23 +135,24 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx) {
 /**
  * @brief Wait until radio busy pin returns to 0
  */
-void lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx) {
+bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx) {
     while (gpiod_line_request_get_value(ctx->line_req, ctx->busy_pin_offset) == GPIOD_LINE_VALUE_ACTIVE) {
-        assert(gpiod_line_request_wait_edge_events(ctx->line_req, -1) != -1);
+        checkbs(gpiod_line_request_wait_edge_events(ctx->line_req, -1) != -1);
         // we do nothing with the edge events here as we are just waiting anyways.
     }
+    return true;
 } 
 
 /**
  * @brief Send an IOC transfer to spi bus. Along with handling NSS & BUSY signals 
  */
-void lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_ioc_transfer* transfer) {
-    lr11xx_hal_wait_while_busy(ctx);
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_ioc_transfer* transfer) {
+    checkbs(lr11xx_hal_wait_while_busy(ctx));
+    checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
 
-    assert(ioctl(ctx->spi_device, SPI_MSGSIZE(1), transfer) >= 0);
+    checkbs(ioctl(ctx->spi_device, SPI_MSGSIZE(1), transfer) >= 0);
 
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 }
 
 /**
@@ -184,7 +188,7 @@ lr11xx_hal_status_t lr11xx_hal_write(const void *context, const uint8_t *command
     #endif
 
     // set nss & send data
-    lr11xx_hal_send_ioc_transfer(ctx, &t);
+    checkls(lr11xx_hal_send_ioc_transfer(ctx, &t));
 
     // clean up
     free(tx_buf);
@@ -232,10 +236,10 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
     data_rx.tx_buf = (__u64)nop_tx_buf;
 
     // transmit cmd packet 
-    lr11xx_hal_send_ioc_transfer(ctx, &cmd_tx);
+    checkls(lr11xx_hal_send_ioc_transfer(ctx, &cmd_tx));
 
     // receive data & transmit nop
-    lr11xx_hal_send_ioc_transfer(ctx, &data_rx);
+    checkls(lr11xx_hal_send_ioc_transfer(ctx, &data_rx));
 
     // parse received data
     memcpy(data, data_rx_buf + 1, data_length);
@@ -277,7 +281,7 @@ lr11xx_hal_status_t lr11xx_hal_direct_read(const void *context, uint8_t *data, c
     rx.rx_buf = (__u64)rx_buf;
 
     // receive data
-    lr11xx_hal_send_ioc_transfer(ctx, &rx);
+    checkls(lr11xx_hal_send_ioc_transfer(ctx, &rx));
 
     // parse received data
     memcpy(data, rx_buf, data_length);
@@ -302,9 +306,9 @@ lr11xx_hal_status_t lr11xx_hal_direct_read(const void *context, uint8_t *data, c
 lr11xx_hal_status_t lr11xx_hal_reset(const void *context) {
     const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
     usleep(1000); // sleep 1ms for IO to catch up
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
     return LR11XX_HAL_STATUS_OK;
 }
@@ -312,9 +316,9 @@ lr11xx_hal_status_t lr11xx_hal_reset(const void *context) {
 lr11xx_hal_status_t lr11xx_hal_wakeup(const void *context) {
     const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
     usleep(1000); // sleep 1ms for IO to catch up
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
     return LR11XX_HAL_STATUS_OK;
 }
@@ -330,13 +334,13 @@ lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
 
     // transmit packet
     // not using lr11xx_hal_send_ioc_transfer as wait busy is comes after instead of before nss to low 
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
 
-    assert(ioctl(ctx->spi_device, SPI_MSGSIZE(1), &t) >= 0);
+    checkls(ioctl(ctx->spi_device, SPI_MSGSIZE(1), &t) >= 0);
 
-    assert(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
-    lr11xx_hal_wait_while_busy(ctx);
+    checkls(lr11xx_hal_wait_while_busy(ctx));
 
     return LR11XX_HAL_STATUS_OK;
 }
