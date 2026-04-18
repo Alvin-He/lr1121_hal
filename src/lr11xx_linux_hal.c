@@ -153,6 +153,8 @@ bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_io
     checkbs(ioctl(ctx->spi_device, SPI_MSGSIZE(1), transfer) >= 0);
 
     checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+
+    return true;
 }
 
 /**
