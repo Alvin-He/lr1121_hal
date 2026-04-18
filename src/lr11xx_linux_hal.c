@@ -78,9 +78,10 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     
     // get GPIO offsets
     int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, reset_pin_name); assert(reset_pin_offset != -1);
-    int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, nss_pin_name  ); assert(nss_pin_offset   != -1);
+    // int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, nss_pin_name  ); assert(nss_pin_offset   != -1);
     int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, busy_pin_name ); assert(busy_pin_offset  != -1);
-    ctx->nss_pin_offset = nss_pin_offset; ctx->busy_pin_offset = busy_pin_offset;
+    // ctx->nss_pin_offset = nss_pin_offset; 
+    ctx->busy_pin_offset = busy_pin_offset;
     
     // input pin config: floating, active high
     struct gpiod_line_settings* settings_input = mem->settings_input = gpiod_line_settings_new(); assert(settings_input);
@@ -100,7 +101,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     struct gpiod_line_config* cfg_line = mem->cfg_line = gpiod_line_config_new(); assert(cfg_line);
     unsigned int inputs[] = {ctx->busy_pin_offset};
     assert(gpiod_line_config_add_line_settings(cfg_line, inputs, 2, settings_input) == 0);
-    unsigned int outputs[] = {ctx->reset_pin_offset, ctx->nss_pin_offset};
+    unsigned int outputs[] = {ctx->reset_pin_offset}; // ctx->nss_pin_offset
     assert(gpiod_line_config_add_line_settings(cfg_line, outputs, 2, settings_output) == 0);
 
     // gpio request config
@@ -148,11 +149,11 @@ bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx) {
  */
 bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_ioc_transfer* transfer) {
     checkbs(lr11xx_hal_wait_while_busy(ctx));
-    checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    // checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
 
     checkbs(ioctl(ctx->spi_device, SPI_MSGSIZE(1), transfer) >= 0);
 
-    checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
     return true;
 }
@@ -316,13 +317,14 @@ lr11xx_hal_status_t lr11xx_hal_reset(const void *context) {
 }
 
 lr11xx_hal_status_t lr11xx_hal_wakeup(const void *context) {
-    const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
+    // const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
-    usleep(1000); // sleep 1ms for IO to catch up
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    // usleep(1000); // sleep 1ms for IO to catch up
+    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
-    return LR11XX_HAL_STATUS_OK;
+    // return LR11XX_HAL_STATUS_OK;
+    return lr11xx_hal_wakeup(context);
 }
 
 lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
@@ -336,11 +338,11 @@ lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
 
     // transmit packet
     // not using lr11xx_hal_send_ioc_transfer as wait busy is comes after instead of before nss to low 
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
 
     checkls(ioctl(ctx->spi_device, SPI_MSGSIZE(1), &t) >= 0);
 
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
 
     checkls(lr11xx_hal_wait_while_busy(ctx));
 
