@@ -6,17 +6,21 @@
 
 
 #include "lr11xx_hal.h"
+#include "lr11xx_types.h"
 #include "lr11xx_linux_hal.h"
 #include <bits/types.h>
+#include <errno.h>
 #include <linux/spi/spi.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <assert.h>
-#include <gpiod.h>
+#include <lgpio.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
 #include <fcntl.h>
@@ -27,19 +31,18 @@
 #define checkls(s) if(!(s)) return LR11XX_HAL_STATUS_ERROR;
 
 lr11xx_hal_context_t* lr11xx_init_hal(
-    const char* spi_device_path, const char* gpio_device_path,
-    const char* reset_pin_name, const char* nss_pin_name, const char* busy_pin_name
+    const char* spi_device_path, const int gpio_chip_number,
+    const int reset_pin, const int nss_pin, const int busy_pin
 ) {
-    assert(spi_device_path); assert(gpio_device_path); // null check
+    assert(spi_device_path); 
 
     // alloc context & mem structs 
     lr11xx_hal_context_t* ctx = malloc(sizeof(lr11xx_hal_context_t)); assert(ctx);
-    lr11xx_hal_ctx_mem_t* mem = ctx->mem = malloc(sizeof(lr11xx_hal_ctx_mem_t)); assert(mem);
 
     ///////////
     /// SPI ///
     ///////////
-    int dev = ctx->spi_device = openat(AT_FDCWD, spi_device_path, O_RDWR | O_DSYNC); assert(dev >= 0);
+    int dev = ctx->spi_device = openat(AT_FDCWD, spi_device_path, O_RDWR | O_SYNC); assert(dev >= 0);
     
     // set spi mode
     const uint8_t mode = LR1121_KSPI_MODE;
@@ -60,7 +63,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     assert(ioctl(dev, SPI_IOC_WR_BITS_PER_WORD, &bpw) >= 0); // 0 is 8 bits per word
     uint8_t bpw_set; 
     assert(ioctl(dev, SPI_IOC_RD_BITS_PER_WORD, &bpw_set) >= 0);
-    assert(bpw_set == bpw);
+    assert(bpw_set == bpw || (bpw_set == 8 && bpw == 0));
 
     // set spi bit order
     uint8_t bit_order = LR1121_KSPI_IS_LSB_FIRST;
@@ -74,44 +77,20 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     ////////////
 
     // get GPIO chip
-    struct gpiod_chip* chip = mem->chip = gpiod_chip_open(gpio_device_path); assert(chip); 
-    
-    // get GPIO offsets
-    int reset_pin_offset = gpiod_chip_get_line_offset_from_name(chip, reset_pin_name); assert(reset_pin_offset != -1);
-    // int nss_pin_offset   = gpiod_chip_get_line_offset_from_name(chip, nss_pin_name  ); assert(nss_pin_offset   != -1);
-    int busy_pin_offset  = gpiod_chip_get_line_offset_from_name(chip, busy_pin_name ); assert(busy_pin_offset  != -1);
-    // ctx->nss_pin_offset = nss_pin_offset; 
-    ctx->busy_pin_offset = busy_pin_offset;
-    
-    // input pin config: floating, active high
-    struct gpiod_line_settings* settings_input = mem->settings_input = gpiod_line_settings_new(); assert(settings_input);
-    assert(gpiod_line_settings_set_direction(settings_input, GPIOD_LINE_DIRECTION_INPUT) == 0);
-    assert(gpiod_line_settings_set_bias(settings_input, GPIOD_LINE_BIAS_DISABLED) == 0);
-    gpiod_line_settings_set_active_low(settings_input, false);
-    assert(gpiod_line_settings_set_edge_detection(settings_input, true) == 0);
-    
-    // output pins config: push-pull, active high, initially active(high)
-    struct gpiod_line_settings* settings_output = mem->settings_output = gpiod_line_settings_new(); assert(settings_output);
-    assert(gpiod_line_settings_set_direction(settings_input, GPIOD_LINE_DIRECTION_OUTPUT) == 0);
-    assert(gpiod_line_settings_set_drive(settings_output, GPIOD_LINE_DRIVE_PUSH_PULL) == 0);
-    gpiod_line_settings_set_active_low(settings_output, false);
-    assert(gpiod_line_settings_set_output_value(settings_output, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // struct gpiod_chip* chip = mem->chip = gpiod_chip_open(gpio_device_path); assert(chip); 
+    int gpio_dev = lgGpiochipOpen(gpio_chip_number); assert(gpio_dev >= 0);
+    ctx->gpio_device = gpio_dev;
 
-    // put the seetings into a ling config
-    struct gpiod_line_config* cfg_line = mem->cfg_line = gpiod_line_config_new(); assert(cfg_line);
-    unsigned int inputs[] = {ctx->busy_pin_offset};
-    assert(gpiod_line_config_add_line_settings(cfg_line, inputs, 2, settings_input) == 0);
-    unsigned int outputs[] = {ctx->reset_pin_offset}; // ctx->nss_pin_offset
-    assert(gpiod_line_config_add_line_settings(cfg_line, outputs, 2, settings_output) == 0);
-
-    // gpio request config
-    struct gpiod_request_config* cfg_req = mem->cfg_req = gpiod_request_config_new(); assert(cfg_req);
-    gpiod_request_config_set_consumer(cfg_req, LR1121_KGPIO_CONSUMER_IDENT);
-    gpiod_request_config_set_event_buffer_size(cfg_req, 0); // use defult
-
-    // request the pins
-    struct gpiod_line_request* req = mem->line_req = gpiod_chip_request_lines(chip, cfg_req, cfg_line); assert(NULL);
-    ctx->line_req = req;
+    ctx->busy_pin = busy_pin;
+    ctx->nss_pin = nss_pin;
+    ctx->reset_pin = reset_pin;
+    
+    // busy pin: floating
+    assert(lgGpioClaimInput(gpio_dev, LG_SET_PULL_NONE, busy_pin) == 0);
+    // reset pin: push pull, initially high
+    assert(lgGpioClaimOutput(gpio_dev, 0, reset_pin, 1) == 0);
+    // nss pin: push pull, initially high
+    // assert(lgGpioClaimOutput(gpio_dev, 0, nss_pin, 1) == 0);
 
     return ctx;
 }
@@ -120,16 +99,12 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx) {
     // relase spi
     close(ctx->spi_device); ctx->spi_device = -1;
 
-    // must be free the the reverse order of construction (aka last constructed is first released)
-    lr11xx_hal_ctx_mem_t* mem = ctx->mem;
-    gpiod_line_request_release(mem->line_req); ctx->line_req = mem->line_req = NULL; 
-    gpiod_line_config_free(mem->cfg_line); mem->cfg_line = NULL;
-    gpiod_line_settings_free(mem->settings_output); mem->settings_output = NULL;
-    gpiod_line_settings_free(mem->settings_input); mem->settings_input = NULL;
-    gpiod_chip_close(mem->chip); mem->chip = NULL;
-    
+    lgGpioFree(ctx->gpio_device, ctx->busy_pin);
+    lgGpioFree(ctx->gpio_device, ctx->reset_pin);
+    // lgGpioFree(ctx->gpio_device, ctx->nss_pin);
+    lgGpiochipClose(ctx->gpio_device);
+
     // free the ctx and mem structs
-    free(mem); ctx->mem = NULL;
     free(ctx); ctx = NULL;
 }
 
@@ -137,10 +112,12 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx) {
  * @brief Wait until radio busy pin returns to 0
  */
 bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx) {
-    while (gpiod_line_request_get_value(ctx->line_req, ctx->busy_pin_offset) == GPIOD_LINE_VALUE_ACTIVE) {
-        checkbs(gpiod_line_request_wait_edge_events(ctx->line_req, -1) != -1);
-        // we do nothing with the edge events here as we are just waiting anyways.
-    }
+    int state = 1;
+    do {
+        state = lgGpioRead(ctx->gpio_device, ctx->busy_pin);
+        checkbs(state >= 0);
+        usleep(100);
+    }while (state == 1);
     return true;
 } 
 
@@ -149,11 +126,40 @@ bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx) {
  */
 bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_ioc_transfer* transfer) {
     checkbs(lr11xx_hal_wait_while_busy(ctx));
-    // checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
 
-    checkbs(ioctl(ctx->spi_device, SPI_MSGSIZE(1), transfer) >= 0);
+    if (transfer->tx_buf != 0) {
+        printf("Written: ");
+        uint8_t* ptr = (uint8_t*)transfer->tx_buf;
+        for (uint32_t i = 0; i < transfer->len; i++) {
+            printf("%02hhx ", ptr[i]);
+        }
+        printf("\n");
+    }
 
-    // checkbs(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    uint8_t* debug_rx_buf = NULL;
+    if (transfer->rx_buf == 0) {
+        debug_rx_buf = calloc(1, transfer->len); assert(debug_rx_buf);
+        transfer->rx_buf = (__u64)debug_rx_buf;
+    }
+
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
+
+    checkbs(ioctl(ctx->spi_device, SPI_IOC_MESSAGE(1), transfer) >= 0);
+
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0)
+
+    if (transfer->rx_buf != 0) {        
+        printf("Read:    ");
+        uint8_t* ptr = (uint8_t*)transfer->rx_buf;
+        for (uint32_t i = 0; i < transfer->len; i++) {
+            printf("%02hhx ", ptr[i]);
+        }
+        printf("\n");
+    }
+
+    if (debug_rx_buf) {
+        free(debug_rx_buf);
+    }
 
     return true;
 }
@@ -164,6 +170,63 @@ bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_io
 const lr11xx_hal_context_t* lr11xx_hal_context_from_ptr(const void* ctx) {
     assert(ctx);
     return (const lr11xx_hal_context_t*) ctx;
+}
+
+lr11xx_hal_status_t lr11xx_boostrap(lr11xx_hal_context_t* ctx) {
+    printf("BOOTSTRAP=system_reset\n");
+    // free busy pin
+    checkls(lgGpioFree(ctx->gpio_device, ctx->busy_pin) == 0);
+
+    // reclaim busy an output, and pull down & write low
+    checkls(lgGpioClaimOutput(ctx->gpio_device, LG_SET_PULL_DOWN, ctx->busy_pin, 0) == 0);
+    checkls(lgGpioWrite(ctx->gpio_device, ctx->busy_pin, 0) == 0);
+
+    // issue a reset
+    checkls(lr11xx_hal_reset(ctx) == LR11XX_HAL_STATUS_OK);
+
+    // continue holding busy
+    usleep(500*1000); // sleep for 500ms
+
+    // reset busy back to input
+    checkls(lgGpioFree( ctx->gpio_device, ctx->busy_pin) == 0);
+    checkls(lgGpioClaimInput(ctx->gpio_device, LG_SET_PULL_NONE, ctx->busy_pin) == 0);
+
+    usleep(100*1000); // hold for 100ms more
+    return LR11XX_HAL_STATUS_OK;
+}
+
+lr11xx_hal_status_t lr11xx_hal_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length) {
+    const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
+
+    //  ioc transfer
+    struct spi_ioc_transfer transfer = {0};
+    transfer.len = length;
+    transfer.rx_buf = (__u64)data_read;
+    transfer.tx_buf = (__u64)cmd_write;
+
+    checkls(lr11xx_hal_wait_while_busy(ctx));
+
+    if (transfer.tx_buf != 0) {
+        printf("Written: ");
+        uint8_t* ptr = (uint8_t*)transfer.tx_buf;
+        for (uint32_t i = 0; i < transfer.len; i++) {
+            printf("%02hhx ", ptr[i]);
+        }
+        printf("\n");
+    }
+
+    checkls(ioctl(ctx->spi_device, SPI_IOC_MESSAGE(1), transfer) >= 0);
+
+    if (transfer.rx_buf != 0) {        
+        printf("Read:    ");
+        uint8_t* ptr = (uint8_t*)transfer.rx_buf;
+        for (uint32_t i = 0; i < transfer.len; i++) {
+            printf("%02hhx ", ptr[i]);
+        }
+        printf("\n");
+    }
+
+    return LR11XX_HAL_STATUS_OK;
 }
 
 lr11xx_hal_status_t lr11xx_hal_write(const void *context, const uint8_t *command, const uint16_t command_length, const uint8_t *data, const uint16_t data_length) {
@@ -190,7 +253,7 @@ lr11xx_hal_status_t lr11xx_hal_write(const void *context, const uint8_t *command
         memcpy(tx_buf + command_length + data_length, &cmd_crc, 1);
     #endif
 
-    // set nss & send data
+    // send data
     checkls(lr11xx_hal_send_ioc_transfer(ctx, &t));
 
     // clean up
@@ -240,7 +303,7 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
 
     // transmit cmd packet 
     checkls(lr11xx_hal_send_ioc_transfer(ctx, &cmd_tx));
-
+    usleep(1000);
     // receive data & transmit nop
     checkls(lr11xx_hal_send_ioc_transfer(ctx, &data_rx));
 
@@ -309,22 +372,26 @@ lr11xx_hal_status_t lr11xx_hal_direct_read(const void *context, uint8_t *data, c
 lr11xx_hal_status_t lr11xx_hal_reset(const void *context) {
     const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    checkls(lgGpioWrite(ctx->gpio_device, ctx->reset_pin, 0) == 0);
     usleep(1000); // sleep 1ms for IO to catch up
-    checkls(gpiod_line_request_set_value(ctx->line_req, ctx->reset_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    checkls(lgGpioWrite(ctx->gpio_device, ctx->reset_pin, 1) == 0);
 
     return LR11XX_HAL_STATUS_OK;
 }
 
 lr11xx_hal_status_t lr11xx_hal_wakeup(const void *context) {
-    // const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
+    const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
-    // usleep(1000); // sleep 1ms for IO to catch up
-    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
+    const uint8_t cmd[2] = {0};
+    size_t bits_per_ms = LR1121_KSPI_MAX_SPEED_HZ / 1000 / 8;
+    uint8_t* data = calloc(1, bits_per_ms); // write enough nops for 1ms
+    lr11xx_hal_status_t stat = lr11xx_hal_write(ctx, cmd, 2, data, bits_per_ms);
+    free(data);
+    // usleep(1000);
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0);
 
-    // return LR11XX_HAL_STATUS_OK;
-    return lr11xx_hal_wakeup(context);
+    return stat;
 }
 
 lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
@@ -338,11 +405,11 @@ lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
 
     // transmit packet
     // not using lr11xx_hal_send_ioc_transfer as wait busy is comes after instead of before nss to low 
-    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_INACTIVE) == 0);
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
 
-    checkls(ioctl(ctx->spi_device, SPI_MSGSIZE(1), &t) >= 0);
+    checkls(ioctl(ctx->spi_device, SPI_IOC_MESSAGE(1), &t) >= 0);
 
-    // checkls(gpiod_line_request_set_value(ctx->line_req, ctx->nss_pin_offset, GPIOD_LINE_VALUE_ACTIVE) == 0);
+    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0);
 
     checkls(lr11xx_hal_wait_while_busy(ctx));
 

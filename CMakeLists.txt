@@ -24,6 +24,8 @@ set_target_properties(libgpiod PROPERTIES
 # openssl
 find_package(OpenSSL COMPONENTS Crypto)
 
+find_library(LGPIO_LIB NAMES lgpio REQUIRED)
+
 #
 # Targets
 #
@@ -34,7 +36,7 @@ add_library(lr11xx_hal STATIC
 add_library(lr11xx_hal::lr11xx_hal ALIAS lr11xx_hal)
 target_link_libraries(lr11xx_hal 
     PUBLIC lr11xx_driver::lr11xx_driver
-    PRIVATE libgpiod
+    PRIVATE ${LGPIO_LIB}
 )
 
 if(OpenSSL_FOUND)

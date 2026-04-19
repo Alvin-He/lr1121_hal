@@ -1,10 +1,16 @@
+#include <time.h>
+#undef NDEBUG // To ensure that assert based checks happen
+
 #include "lr11xx_bootloader_types.h"
+#include "lr11xx_hal.h"
+#include "lr11xx_system.h"
+#include "lr11xx_system_types.h"
 #include "lr11xx_types.h"
 #include <openssl/types.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <string.h>
-#undef NDEBUG // To ensure that assert based checks happen
+// #include "lr1121_loader_2100.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -18,9 +24,9 @@
 #include <openssl/evp.h>
 #include "lr11xx_linux_hal.h"
 
-#define K_GPIO_DEVICE_PATH "/dev/gpiochip4"
+#define K_GPIO_DEVICE_PATH "4" //"/dev/gpiochip4"
 #define K_BOOTSTRAP_MAX_RETRIES 3
-#define K_WAIT_TIME_FOR_START_UP_SECONDS 5 
+#define K_WAIT_TIME_FOR_START_UP_SECONDS 1
 #define K_MIN_ARGS 5
 #define K_MAX_ARGS 6
 
@@ -62,8 +68,13 @@ int main(int argc, const char* argv[]) {
         close(firmware_fd);
         return 1;
     };
-    uint32_t* firmware = malloc(firmware_meta.st_size); assert(firmware);
-    if (read(firmware_fd, firmware, firmware_meta.st_size) != 0) {
+    uint32_t word_count = firmware_meta.st_size / 4;
+    if (word_count * 4 != firmware_meta.st_size) {
+        word_count += 1; // didn't cleanly divide, add an extra word to pad out any remaining bytes
+    }
+    uint32_t* firmware = calloc(word_count, sizeof(uint32_t)); assert(firmware);
+
+    if (read(firmware_fd, firmware, firmware_meta.st_size) < 0) {
         printf("Failed to read firmware file!\n");
         perror("Got error:");
         free(firmware);
@@ -75,7 +86,7 @@ int main(int argc, const char* argv[]) {
 
     // compute md5 hash of firmware
     const EVP_MD* md5 = EVP_md5();
-    uint8_t firmware_hash[EVP_MAX_MD_SIZE] = {0}; // this create a null terminated string if firmware_hash is used as a str reference
+    uint8_t firmware_hash[EVP_MAX_MD_SIZE] = {0}; 
     unsigned int hash_len;
     if (EVP_Digest(firmware, firmware_meta.st_size, firmware_hash, &hash_len, md5, NULL) != 1) {
         printf("Failed to compute firmware hash!\n");
@@ -94,50 +105,86 @@ int main(int argc, const char* argv[]) {
     printf("\tNSS  \t%s\n", nss_pin_name);
     printf("\tBUSY \t%s\n", busy_pin_name);
     printf("Firmware file to flush to LR11XX is: %s\n", firmware_bin_path);
-    printf("This firmware file have md5 hash of `%s`.", firmware_hash);
+    printf("This firmware file have md5 hash of ");
+    for (unsigned int i = 0; i < hash_len; i++) {
+        printf("%x", firmware_hash[i]);
+    }
     
     // get confirmation before proceed
     printf("\nPlease confirm all settings are correct.\n");
     printf("After susscessfully confirming all settings: Press Y to begin, or press ANY OTHER KEY to STOP and quit.\n");
-    char* line = NULL;
-    size_t len = 0;
-    if (getline(&line, &len, stdin) == -1
-        || len != 1
-        || !(line[0] == 'Y' || line[0] == 'y')
-    ) {
-        printf("Exiting.\n");
-        free(line);
-        return 0;
-    };
+    // char* line = NULL;
+    // size_t size = 0;
+    // if (getline(&line, &size, stdin) == -1
+    //     || strlen(line) < 1
+    //     || !(line[0] == 'Y' || line[0] == 'y')
+    // ) {
+    //     printf("Exiting.\n");
+    //     free(line);
+    //     return 0;
+    // };
 
     printf("Starting firmware update. Please make sure the LR11XX stays powered on untill this process finishes.\n");
-
 
     //
     // Init LR11XX HAL
     //
     printf("Opening LR11XX.\n");
-    lr11xx_hal_context_t* ctx = lr11xx_init_hal(spi_device_path, gpio_device_path, reset_pin_name, nss_pin_name, busy_pin_name);
+    lr11xx_hal_context_t* ctx = lr11xx_init_hal(spi_device_path, 
+        atoi(gpio_device_path), 
+        atoi(reset_pin_name),
+        atoi(nss_pin_name),
+        atoi(busy_pin_name)
+    );
 
+{
+    lr11xx_system_stat1_t s1 = {0};
+    lr11xx_system_stat2_t s2 = {0};
+    lr11xx_system_irq_mask_t irq = {0};
+    if (lr11xx_system_get_status(ctx, &s1, &s2, &irq) != LR11XX_STATUS_OK) {
+        printf("CRITICAL: Failed to get status of LR11XX!\n");
+        lr11xx_close_hal(ctx);
+        return 10;
+    };
+    printf("\tCMD Status:  \t%d\n", s1.command_status);
+    printf("\tHas IRQ:     \t%d\n", s1.is_interrupt_active);
+    printf("\tIs Flash:    \t%d\n", s2.is_running_from_flash);
+    printf("\tChip Mode:   \t%d\n", s2.chip_mode);
+    printf("\tReset Status:\t%d\n", s2.reset_status);
+}
 
     //
     // Bootstrapping 
     //
     bool is_in_bootloader_mode = false;
-    for (int i = 0; i < K_BOOTSTRAP_MAX_RETRIES; i++) {
+    for (int i = 1; i <= K_BOOTSTRAP_MAX_RETRIES; i++) {
         printf("Booting LR11XX into bootloader mode. Try %d of %d.\n", i, K_BOOTSTRAP_MAX_RETRIES);
         
-        if (lr11xx_bootloader_reboot(ctx, true) != LR11XX_STATUS_OK) {
+        // if (lr11xx_bootloader_reboot(ctx, true) != LR11XX_STATUS_OK) {
+        //     printf("bootloader_reboot cmd failed\n");
+        //     sleep(K_WAIT_TIME_FOR_START_UP_SECONDS);
+        //     continue;
+        // };
+
+        if (lr11xx_boostrap(ctx) != LR11XX_HAL_STATUS_OK) {
+            printf("bootloader_reboot cmd failed\n");
             sleep(K_WAIT_TIME_FOR_START_UP_SECONDS);
             continue;
         };
 
-        sleep(K_WAIT_TIME_FOR_START_UP_SECONDS); // wait for LR11XX to start
+        // sleep(K_WAIT_TIME_FOR_START_UP_SECONDS); // wait for LR11XX to start
 
         lr11xx_bootloader_stat1_t s1;
         lr11xx_bootloader_stat2_t s2;
         lr11xx_bootloader_irq_mask_t irq;
+        printf("get status\n");
         if (lr11xx_bootloader_get_status(ctx, &s1, &s2, &irq) != LR11XX_STATUS_OK) continue;
+
+        printf("\tCMD Status:  \t%02hhx\n", s1.command_status);
+        printf("\tHas IRQ:     \t%02hhx\n", s1.is_interrupt_active);
+        printf("\tIs Flash:    \t%02hhx\n", s2.is_running_from_flash);
+        printf("\tChip Mode:   \t%02hhx\n", s2.chip_mode);
+        printf("\tReset Status:\t%02hhx\n", s2.reset_status);
 
         if (!s2.is_running_from_flash) {
             is_in_bootloader_mode = true;
@@ -145,30 +192,115 @@ int main(int argc, const char* argv[]) {
         }    
     }
     if (!is_in_bootloader_mode) {
-        printf("CRITICAL: Failed to boot into bootloader mode!");
+        printf("CRITICAL: Failed to boot into bootloader mode!\n");
         free(firmware);
         lr11xx_close_hal(ctx);
         return 1;
     }
     printf("Booted LR11XX into bootloader mode.\n");
+    
+    printf("bootloader get eui\n");
+    lr11xx_bootloader_chip_eui_t eui;
+    assert(lr11xx_bootloader_read_chip_eui(ctx, eui) == LR11XX_STATUS_OK);
+    printf("eui: ");
+    for (size_t i = 0; i < sizeof(eui); i++) {
+        printf("%02hhx ", eui[i]);
+    }
+    printf("\n");
+
+    printf("literal get-status: \n");
+    const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t status_res[6] = {0};
+    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    printf("get-status result: ");
+    for (size_t i = 0; i < sizeof(status_res); i++) {
+        printf("%02hhx ", status_res[i]);
+    }
+    printf("\n");
+
+ 
+{
+    printf("Send GetVersion CMD\n");
+    const uint8_t get_version_cmd[2] = {0x01, 0x01};
+    assert(lr11xx_hal_read_write(ctx, get_version_cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+
+    printf("literal get-status: \n");
+    const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t status_res[6] = {0};
+    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    printf("get-status result: ");
+    for (size_t i = 0; i < sizeof(status_res); i++) {
+        printf("%02hhx ", status_res[i]);
+    }
+    printf("\n");
+}
+
+{
+    printf("Send 0x80 0x0c CMD\n");
+    const uint8_t cmd[2] = {0x80, 0x0c};
+    assert(lr11xx_hal_read_write(ctx, cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+
+    printf("literal get-status: \n");
+    const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t status_res[6] = {0};
+    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    printf("get-status result: ");
+    for (size_t i = 0; i < sizeof(status_res); i++) {
+        printf("%02hhx ", status_res[i]);
+    }
+    printf("\n");
+}
+
+    printf("bootloader get ver\n");
+    lr11xx_bootloader_version_t ver1 = {0};
+    assert(lr11xx_bootloader_get_version(ctx, &ver1) == LR11XX_STATUS_OK);
+    printf("\tFW:\t%d\n", ver1.fw);
+    printf("\tHW:\t%d\n", ver1.hw);
+    printf("\tType:\t%x\n", ver1.type);
+    
+    if (ver1.type != 0xDF) {
+        printf("Incompitable bootloader type, exiting.\n");
+        free(firmware);
+        lr11xx_close_hal(ctx);
+        return 1;
+    }
 
     //
     // Erase flash
     //
     printf("Erasing LR11XX flash.\n");
     if (lr11xx_bootloader_erase_flash(ctx) != LR11XX_STATUS_OK) {
-        printf("CRITICAL: Erase Flash returned error!");
+        printf("CRITICAL: Erase Flash returned error!\n");
         free(firmware);
         lr11xx_close_hal(ctx);
         return 1;
     };
+    {
+        lr11xx_bootloader_stat1_t s1;
+        lr11xx_bootloader_stat2_t s2;
+        lr11xx_bootloader_irq_mask_t irq;
+        printf("get status\n");
+        assert(lr11xx_bootloader_get_status(ctx, &s1, &s2, &irq) == LR11XX_STATUS_OK);
+        printf("\tCMD Status:  \t%02hhx\n", s1.command_status);
+        printf("\tHas IRQ:     \t%02hhx\n", s1.is_interrupt_active);
+        printf("\tIs Flash:    \t%02hhx\n", s2.is_running_from_flash);
+        printf("\tChip Mode:   \t%02hhx\n", s2.chip_mode);
+        printf("\tReset Status:\t%02hhx\n", s2.reset_status);
+
+        if (s1.command_status != LR11XX_BOOTLOADER_CMD_STATUS_OK) {
+            printf("failed to erase chip\n");
+            free(firmware);
+            lr11xx_close_hal(ctx);
+            return 1;
+        }
+    }
 
     //
     // Flash new firmware
     //
     printf("Flashing new firmware.\n");
-    if (lr11xx_bootloader_write_flash_encrypted_full(ctx, 0, firmware, firmware_meta.st_size/4) != LR11XX_STATUS_OK) {
-        printf("CRITICAL: Flash firmware returned error!");
+    if (lr11xx_bootloader_write_flash_encrypted_full(ctx, 0, firmware, word_count) != LR11XX_STATUS_OK) {
+        printf("CRITICAL: Flash firmware returned error!\n");
         free(firmware);
         lr11xx_close_hal(ctx);
         return 1;
@@ -177,26 +309,70 @@ int main(int argc, const char* argv[]) {
     // clean up
     free(firmware);
 
+    {
+        lr11xx_bootloader_stat1_t s1;
+        lr11xx_bootloader_stat2_t s2;
+        lr11xx_bootloader_irq_mask_t irq;
+        printf("get status post write\n");
+        assert(lr11xx_bootloader_get_status(ctx, &s1, &s2, &irq) == LR11XX_STATUS_OK);
+
+        printf("\tCMD Status:  \t%02hhx\n", s1.command_status);
+        printf("\tHas IRQ:     \t%02hhx\n", s1.is_interrupt_active);
+        printf("\tIs Flash:    \t%02hhx\n", s2.is_running_from_flash);
+        printf("\tChip Mode:   \t%02hhx\n", s2.chip_mode);
+        printf("\tReset Status:\t%02hhx\n", s2.reset_status);
+    }
+
+    //
+    // Verify flashed firmware
+    //
+    lr11xx_bootloader_hash_t hash = {0};
+    if (lr11xx_bootloader_get_hash(ctx, hash) != LR11XX_STATUS_OK) {
+        printf("CRITICAL: LR1121 flahsed susscessfully, but we were unable to get hash of flashed firmware.\n");
+        printf("If you wish to, you may try to rerun this firmware updater after a powercycle of the LR11XX.\n");
+        lr11xx_close_hal(ctx);
+        return 10;
+    }
+
+    if (memcmp(hash, firmware_hash, sizeof(hash)) == 0) {
+        printf("Susscessfully verified flushed firmware hash!\n");
+    } else {
+        printf("WARNING: LR11XX flashed susscessfully, but the firmware hashs were found to be different.\n");
+        printf("If you wish to, you may try to rerun this firmware updater after a powercycle of the LR11XX.\n");
+    };
+
+
     //
     // Reboot and verify
     //
-    printf("Rebooting LR11XX to verify firmware.\n");
+    printf("Rebooting LR11XX with new firmware.\n");
     if (lr11xx_bootloader_reboot(ctx, false) != LR11XX_STATUS_OK) {
         printf("CRITICAL: Failed to reboot LR11XX!");
         lr11xx_close_hal(ctx);
         return 1;
     };
     sleep(K_WAIT_TIME_FOR_START_UP_SECONDS); // wait for LR11XX to start
-    
+
+    lr11xx_system_version_t ver = {0};
+    assert(lr11xx_system_get_version(ctx, &ver) == LR11XX_STATUS_OK);
+    printf("\tFW:\t%d\n", ver.fw);
+    printf("\tHW:\t%d\n", ver.hw);
+    printf("\tType:\t%x\n", ver.type);
+
     // check status
-    lr11xx_bootloader_stat1_t s1;
-    lr11xx_bootloader_stat2_t s2;
-    lr11xx_bootloader_irq_mask_t irq;
-    if (lr11xx_bootloader_get_status(ctx, &s1, &s2, &irq) != LR11XX_STATUS_OK) {
-        printf("CRITICAL: Failed to get status of LR11XX!");
+    lr11xx_system_stat1_t s1 = {0};
+    lr11xx_system_stat2_t s2 = {0};
+    lr11xx_system_irq_mask_t irq = {0};
+    if (lr11xx_system_get_status(ctx, &s1, &s2, &irq) != LR11XX_STATUS_OK) {
+        printf("CRITICAL: Failed to get status of LR11XX!\n");
         lr11xx_close_hal(ctx);
         return 10;
     };
+    printf("\tCMD Status:  \t%d\n", s1.command_status);
+    printf("\tHas IRQ:     \t%d\n", s1.is_interrupt_active);
+    printf("\tIs Flash:    \t%d\n", s2.is_running_from_flash);
+    printf("\tChip Mode:   \t%d\n", s2.chip_mode);
+    printf("\tReset Status:\t%d\n", s2.reset_status);
     if (!s2.is_running_from_flash) {
         printf("Failure: LR11XX booted back into bootloader mode.\n");
         printf("This means that the LR11XX couldn't verify the firmware flushed or some other error occoured.\n");
@@ -204,29 +380,11 @@ int main(int argc, const char* argv[]) {
         lr11xx_close_hal(ctx);
         return 10;
     }
-    printf("LR11XX booted back sussccessfully to running onboard flashed firmware.");
-
-    // verify loaded firmware hash
-    lr11xx_bootloader_hash_t hash = {0};
-    if (lr11xx_bootloader_get_hash(ctx, hash) != LR11XX_STATUS_OK) {
-        printf("WARNING: LR11XX booted back sussccessfully, but we were unable to get hash of flashed firmware.\n");
-        printf("If you wish to, you may try to rerun this firmware updater after a powercycle of the LR11XX.\n");
-        printf("Exiting: Unable to veify flushed image.\n");
-        lr11xx_close_hal(ctx);
-        return 10;
-    };
+    printf("LR11XX booted back sussccessfully to running onboard flashed firmware.\n");
 
     // free resouces
     lr11xx_close_hal(ctx);
 
-    if (memcmp(hash, firmware_hash, sizeof(hash)) == 0) {
-        printf("Susscessfully verified flushed firmware hash!\n");
-        printf("LR11XX firmware update susscessful!\n");
-        return 0;
-    } else {
-        printf("WARNING: LR11XX booted back sussccessfully, but the firmware hashs were found to be different.\n");
-        printf("If you wish to, you may try to rerun this firmware updater after a powercycle of the LR11XX.\n");
-        printf("Exiting: Unable to veify flushed image.\n");
-        return 10;
-    };
+    printf("LR11XX firmware update susscessful!\n");
+    return 0;
 }

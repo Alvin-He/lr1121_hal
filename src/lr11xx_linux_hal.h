@@ -11,11 +11,15 @@
 // There are bascially constants, don't change them unless you know what you are doing
 
 //#define USE_LR11XX_CRC_OVER_SPI
+#include "lr11xx_hal.h"
+#include <openssl/cryptoerr_legacy.h>
+#include <stdint.h>
 #ifndef LR1121_KSPI_MODE // uint8_t
     #define LR1121_KSPI_MODE SPI_MODE_0
 #endif
 #ifndef LR1121_KSPI_MAX_SPEED_HZ // uint32_t
-    #define LR1121_KSPI_MAX_SPEED_HZ 16000000 // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23 
+    // #define LR1121_KSPI_MAX_SPEED_HZ 16000000 // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23 
+    #define LR1121_KSPI_MAX_SPEED_HZ 100000 // 16mhz max SPI speed, see LR1121 datasheet, rev 2, page 23 
 #endif 
 #ifndef LR1121_KBITS_PER_WORD // uint8_t
     #define LR1121_KBITS_PER_WORD 0 // number of bits per word. 0 means 8 bits  
@@ -27,24 +31,13 @@
     #define LR1121_KGPIO_CONSUMER_IDENT "LR11XX_GPIO_CONSUMER"
 #endif 
 
-typedef struct lr11xx_hal_context_tracked_memory {
-    struct gpiod_chip* chip; 
-    struct gpiod_line_settings* settings_input;
-    struct gpiod_line_settings* settings_output;
-    struct gpiod_line_config* cfg_line;
-    struct gpiod_request_config* cfg_req;
-    struct gpiod_line_request* line_req;
-} lr11xx_hal_ctx_mem_t;
-
 typedef struct lr11xx_hal_context {
-    lr11xx_hal_ctx_mem_t* mem;
-
     int spi_device;
-    unsigned int reset_pin_offset;
-    unsigned int nss_pin_offset;
-    unsigned int busy_pin_offset;
+    int gpio_device;
+    unsigned int reset_pin;
+    unsigned int nss_pin;
+    unsigned int busy_pin;
 
-    struct gpiod_line_request* line_req;
 } lr11xx_hal_context_t;
 
 /**
@@ -53,8 +46,8 @@ typedef struct lr11xx_hal_context {
  * @remark All instances of HAL initilized must be closed through @ref lr11xx_close_hal
  */
 lr11xx_hal_context_t* lr11xx_init_hal(
-    const char* spi_device_path, const char* gpio_device_path,
-    const char* reset_pin_name, const char* nss_pin_name, const char* busy_pin_name
+    const char* spi_device_path, const int gpio_chip_number,
+    const int reset_pin, const int nss_pin, const int busy_pin
 );
 
 /**
@@ -62,4 +55,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(
  */
 void lr11xx_close_hal(lr11xx_hal_context_t* ctx);
 
+lr11xx_hal_status_t lr11xx_boostrap(lr11xx_hal_context_t* ctx);
+bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx);
+lr11xx_hal_status_t lr11xx_hal_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length);
 #endif
