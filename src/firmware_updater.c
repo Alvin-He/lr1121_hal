@@ -160,19 +160,27 @@ int main(int argc, const char* argv[]) {
     for (int i = 1; i <= K_BOOTSTRAP_MAX_RETRIES; i++) {
         printf("Booting LR11XX into bootloader mode. Try %d of %d.\n", i, K_BOOTSTRAP_MAX_RETRIES);
         
-        // if (lr11xx_bootloader_reboot(ctx, true) != LR11XX_STATUS_OK) {
-        //     printf("bootloader_reboot cmd failed\n");
-        //     sleep(K_WAIT_TIME_FOR_START_UP_SECONDS);
-        //     continue;
-        // };
-
-        if (lr11xx_boostrap(ctx) != LR11XX_HAL_STATUS_OK) {
+        if (lr11xx_bootloader_reboot(ctx, true) != LR11XX_STATUS_OK) {
             printf("bootloader_reboot cmd failed\n");
             sleep(K_WAIT_TIME_FOR_START_UP_SECONDS);
             continue;
         };
 
-        // sleep(K_WAIT_TIME_FOR_START_UP_SECONDS); // wait for LR11XX to start
+        printf("Booted out of bootloader!\n");
+
+        lr11xx_system_version_t ver;
+        assert(lr11xx_system_get_version(ctx, &ver) == LR11XX_STATUS_OK);
+        printf("\tFW:\t%02x\n", ver.fw);
+        printf("\tHW:\t%02x\n", ver.hw);
+        printf("\tType:\t%02x\n", ver.type);
+
+        // if (lr11xx_boostrap(ctx) != LR11XX_HAL_STATUS_OK) {
+        //     printf("bootloader_reboot cmd failed\n");
+        //     sleep(K_WAIT_TIME_FOR_START_UP_SECONDS);
+        //     continue;
+        // };
+
+        sleep(K_WAIT_TIME_FOR_START_UP_SECONDS); // wait for LR11XX to start
 
         lr11xx_bootloader_stat1_t s1;
         lr11xx_bootloader_stat2_t s2;
@@ -189,7 +197,7 @@ int main(int argc, const char* argv[]) {
         if (!s2.is_running_from_flash) {
             is_in_bootloader_mode = true;
             break;
-        }    
+        }
     }
     if (!is_in_bootloader_mode) {
         printf("CRITICAL: Failed to boot into bootloader mode!\n");
@@ -207,27 +215,51 @@ int main(int argc, const char* argv[]) {
         printf("%02hhx ", eui[i]);
     }
     printf("\n");
-
+{
     printf("literal get-status: \n");
     const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint8_t status_res[6] = {0};
-    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
     printf("get-status result: ");
     for (size_t i = 0; i < sizeof(status_res); i++) {
         printf("%02hhx ", status_res[i]);
     }
     printf("\n");
-
- 
+}
 {
-    printf("Send GetVersion CMD\n");
-    const uint8_t get_version_cmd[2] = {0x01, 0x01};
-    assert(lr11xx_hal_read_write(ctx, get_version_cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+    printf("Send Get Errors:\n");
+    lr11xx_system_errors_t errors;
+    assert(lr11xx_system_get_errors(ctx, &errors) == LR11XX_STATUS_OK);
+    printf("Got Errors: %02hx\n", errors);
+}
 
+    printf("Clear Errors:\n");
+    assert(lr11xx_system_clear_errors(ctx) == LR11XX_STATUS_OK);
+
+// {
+//     printf("Send GetVersion CMD\n");
+//     const uint8_t get_version_cmd[2] = {0x01, 0x01};
+//     assert(lr11xx_hal_direct_read_write(ctx, get_version_cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+
+//     printf("literal get-status: \n");
+//     const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+//     uint8_t status_res[6] = {0};
+//     assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+//     printf("get-status result: ");
+//     for (size_t i = 0; i < sizeof(status_res); i++) {
+//         printf("%02hhx ", status_res[i]);
+//     }
+//     printf("\n");
+// }
+
+    printf("boot strappping again\n");
+    assert(lr11xx_boostrap(ctx) == LR11XX_HAL_STATUS_OK);
+
+{
     printf("literal get-status: \n");
     const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint8_t status_res[6] = {0};
-    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
     printf("get-status result: ");
     for (size_t i = 0; i < sizeof(status_res); i++) {
         printf("%02hhx ", status_res[i]);
@@ -236,20 +268,51 @@ int main(int argc, const char* argv[]) {
 }
 
 {
-    printf("Send 0x80 0x0c CMD\n");
-    const uint8_t cmd[2] = {0x80, 0x0c};
-    assert(lr11xx_hal_read_write(ctx, cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+    printf("Send Get Errors:\n");
+    lr11xx_system_errors_t errors;
+    assert(lr11xx_system_get_errors(ctx, &errors) == LR11XX_STATUS_OK);
+    printf("Got Errors: %02hx\n", errors);
+}
 
+{
     printf("literal get-status: \n");
     const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint8_t status_res[6] = {0};
-    assert(lr11xx_hal_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
     printf("get-status result: ");
     for (size_t i = 0; i < sizeof(status_res); i++) {
         printf("%02hhx ", status_res[i]);
     }
     printf("\n");
 }
+{
+    printf("literal get-status: \n");
+    const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t status_res[6] = {0};
+    assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+    printf("get-status result: ");
+    for (size_t i = 0; i < sizeof(status_res); i++) {
+        printf("%02hhx ", status_res[i]);
+    }
+    printf("\n");
+}
+
+
+// {
+//     printf("Send 0x80 0x00 CMD\n");
+//     const uint8_t cmd[2] = {0x80, 0x00};
+//     assert(lr11xx_hal_direct_read_write(ctx, cmd, NULL, 2) == LR11XX_HAL_STATUS_OK);
+
+//     printf("literal get-status: \n");
+//     const uint8_t status_cmd[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+//     uint8_t status_res[6] = {0};
+//     assert(lr11xx_hal_direct_read_write(ctx, status_cmd, status_res, 6) == LR11XX_HAL_STATUS_OK);
+//     printf("get-status result: ");
+//     for (size_t i = 0; i < sizeof(status_res); i++) {
+//         printf("%02hhx ", status_res[i]);
+//     }
+//     printf("\n");
+// }
 
     printf("bootloader get ver\n");
     lr11xx_bootloader_version_t ver1 = {0};

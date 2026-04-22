@@ -57,5 +57,5 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx);
 
 lr11xx_hal_status_t lr11xx_boostrap(lr11xx_hal_context_t* ctx);
 bool lr11xx_hal_wait_while_busy(const lr11xx_hal_context_t* ctx);
-lr11xx_hal_status_t lr11xx_hal_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length);
+lr11xx_hal_status_t lr11xx_hal_direct_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length);
 #endif

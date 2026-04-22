@@ -82,7 +82,7 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     ctx->gpio_device = gpio_dev;
 
     ctx->busy_pin = busy_pin;
-    ctx->nss_pin = nss_pin;
+    ctx->nss_pin = -1;
     ctx->reset_pin = reset_pin;
     
     // busy pin: floating
@@ -90,7 +90,6 @@ lr11xx_hal_context_t* lr11xx_init_hal(
     // reset pin: push pull, initially high
     assert(lgGpioClaimOutput(gpio_dev, 0, reset_pin, 1) == 0);
     // nss pin: push pull, initially high
-    // assert(lgGpioClaimOutput(gpio_dev, 0, nss_pin, 1) == 0);
 
     return ctx;
 }
@@ -101,7 +100,6 @@ void lr11xx_close_hal(lr11xx_hal_context_t* ctx) {
 
     lgGpioFree(ctx->gpio_device, ctx->busy_pin);
     lgGpioFree(ctx->gpio_device, ctx->reset_pin);
-    // lgGpioFree(ctx->gpio_device, ctx->nss_pin);
     lgGpiochipClose(ctx->gpio_device);
 
     // free the ctx and mem structs
@@ -142,11 +140,9 @@ bool lr11xx_hal_send_ioc_transfer(const lr11xx_hal_context_t* ctx, struct spi_io
         transfer->rx_buf = (__u64)debug_rx_buf;
     }
 
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
 
     checkbs(ioctl(ctx->spi_device, SPI_IOC_MESSAGE(1), transfer) >= 0);
 
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0)
 
     if (transfer->rx_buf != 0) {        
         printf("Read:    ");
@@ -195,7 +191,7 @@ lr11xx_hal_status_t lr11xx_boostrap(lr11xx_hal_context_t* ctx) {
     return LR11XX_HAL_STATUS_OK;
 }
 
-lr11xx_hal_status_t lr11xx_hal_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length) {
+lr11xx_hal_status_t lr11xx_hal_direct_read_write(const void *context, const uint8_t *cmd_write, uint8_t *data_read, const uint16_t length) {
     const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
     //  ioc transfer
@@ -382,14 +378,11 @@ lr11xx_hal_status_t lr11xx_hal_reset(const void *context) {
 lr11xx_hal_status_t lr11xx_hal_wakeup(const void *context) {
     const lr11xx_hal_context_t* ctx = lr11xx_hal_context_from_ptr(context);
 
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
     const uint8_t cmd[2] = {0};
     size_t bits_per_ms = LR1121_KSPI_MAX_SPEED_HZ / 1000 / 8;
     uint8_t* data = calloc(1, bits_per_ms); // write enough nops for 1ms
     lr11xx_hal_status_t stat = lr11xx_hal_write(ctx, cmd, 2, data, bits_per_ms);
     free(data);
-    // usleep(1000);
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0);
 
     return stat;
 }
@@ -405,11 +398,8 @@ lr11xx_hal_status_t lr11xx_hal_abort_blocking_cmd(const void *context) {
 
     // transmit packet
     // not using lr11xx_hal_send_ioc_transfer as wait busy is comes after instead of before nss to low 
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 0) == 0);
 
     checkls(ioctl(ctx->spi_device, SPI_IOC_MESSAGE(1), &t) >= 0);
-
-    // checkls(lgGpioWrite(ctx->gpio_device, ctx->nss_pin, 1) == 0);
 
     checkls(lr11xx_hal_wait_while_busy(ctx));
 
